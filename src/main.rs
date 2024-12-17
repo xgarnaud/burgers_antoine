@@ -1,29 +1,27 @@
-use std::{fs::File, io::Write};
+mod burgers;
+mod fixed_time_step;
 
 use burgers::BurgersTestCase;
+use fixed_time_step::FixedTimeStep;
 use fv::{
     dual_mesh::DualType,
     mesh::Mesh,
     mesh_2d::Mesh2d,
-    pde_solver::{PDESolver, SpatialScheme, StopCondition, TemporalScheme},
-    time_step::GlobalTimeStep,
+    pde_solver::{PDESolver, SpatialScheme, TemporalScheme},
+    time_step::TimeStep,
 };
-use log::Level;
+use log::info;
 use serde::ser::Serialize;
 use serde_json::json;
-mod burgers;
+use std::{fs::File, io::Write};
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let lx = 100.0;
     let ly = 100.0;
     let nx = 250;
     let ny = 250;
-
-    let cfl = 0.5;
-    let dt_save = 1.0;
-    let n_save = 25;
 
     let msh = Mesh2d::rect_uniform(lx, nx, ly, ny);
 
@@ -38,26 +36,27 @@ fn main() {
     Mesh2d::sol_to_meshb("sol_000.solb", &x).unwrap();
     let solver = test.solver(DualType::Barth);
 
-    let mut dt = GlobalTimeStep::new(cfl, msh.n_verts());
-    let mut it = 0;
+    let tf = 25.0;
+    let n_time_steps = 500;
+    let fixed_dt = tf / n_time_steps as f64;
+    let mut dt = FixedTimeStep::new(fixed_dt, msh.n_verts());
     let mut t = 0.0;
 
     let mut steps = Vec::new();
-    for i in 1..n_save + 1 {
-        (it, t, _) = solver
-            .step(
-                &mut x,
+    for i in 0..n_time_steps {
+        solver.update_time_step(&x, &mut dt);
+        solver
+            .explicit_step(
                 &mut dt,
-                StopCondition::FinalTime((i as f64) * dt_save),
+                &mut x,
                 SpatialScheme::SecondOrderUpwind(fv::limiter::LimiterType::MinMod),
                 TemporalScheme::RK3,
-                Some((it, t)),
-                Some(Level::Debug),
             )
             .unwrap();
-        let fname = format!("sol_{i:03}.solb");
+        t += dt.min();
+        info!("Iteration {}: t = {t:.2e}, time_step = {dt}", i + 1);
+        let fname = format!("sol_{:03}.solb", i + 1);
         Mesh2d::sol_to_meshb(&fname, &x).unwrap();
-        Mesh2d::sol_from_meshb::<2>(&fname).unwrap();
         steps.push(json!({
             "time":t,
             "vertex_fields": {
